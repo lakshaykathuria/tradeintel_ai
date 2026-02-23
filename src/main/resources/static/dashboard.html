@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TradeIntel AI | Live Dashboard</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+    <link rel="icon" type="image/png" href="favicon.png">
+    <link rel="apple-touch-icon" href="favicon.png">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.0/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <style>
+        .flash-green {
+            animation: flashGreen 1s ease-out;
+        }
+
+        .flash-red {
+            animation: flashRed 1s ease-out;
+        }
+
+        @keyframes flashGreen {
+            0% {
+                background-color: rgba(16, 185, 129, 0.2);
+            }
+
+            100% {
+                background-color: transparent;
+            }
+        }
+
+        @keyframes flashRed {
+            0% {
+                background-color: rgba(239, 68, 68, 0.2);
+            }
+
+            100% {
+                background-color: transparent;
+            }
+        }
+    </style>
+</head>
+
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <header class="flex justify-between items-center mb-8">
+            <div class="flex items-center gap-3">
+                <img src="favicon.png" alt="TradeIntel AI" style="width:44px;height:44px;border-radius:12px;">
+                <div>
+                    <h1
+                        class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
+                        TradeIntel AI
+                    </h1>
+                    <p class="text-gray-400">Live Market Dashboard</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-4">
+                <div id="connectionStatus" class="px-3 py-1 rounded-full text-sm font-medium bg-red-900 text-red-200">
+                    Disconnected
+                </div>
+            </div>
+        </header>
+
+        <!-- Subscribe Form -->
+        <div class="bg-gray-800 rounded-lg p-6 mb-8 border border-gray-700">
+            <h2 class="text-xl font-semibold mb-4">Subscribe to Instruments</h2>
+            <div class="flex gap-4 relative">
+                <div class="flex-1 relative">
+                    <input type="text" id="symbolInput" placeholder="e.g. TATAPOWER or NSE_EQ|INE245A01021"
+                        class="w-full bg-gray-700 border border-gray-600 rounded px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
+                        autocomplete="off" oninput="handleSymbolInput(this.value)" onkeydown="handleKeyDown(event)">
+                    <!-- Autocomplete dropdown -->
+                    <div id="autocompleteDropdown"
+                        class="hidden absolute z-10 w-full mt-1 bg-gray-700 border border-gray-600 rounded shadow-lg max-h-60 overflow-y-auto">
+                    </div>
+                </div>
+                <button onclick="subscribeSymbol()"
+                    class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded font-medium transition-colors">
+                    Add
+                </button>
+            </div>
+            <div class="flex gap-2 mt-4 text-sm text-gray-400 flex-wrap">
+                <span>Popular:</span>
+                <button onclick="setSymbol('TATAPOWER')" class="hover:text-blue-400 transition-colors">Tata
+                    Power</button> •
+                <button onclick="setSymbol('SBIN')" class="hover:text-blue-400 transition-colors">SBI</button> •
+                <button onclick="setSymbol('RELIANCE')" class="hover:text-blue-400 transition-colors">Reliance</button>
+                •
+                <button onclick="setSymbol('TCS')" class="hover:text-blue-400 transition-colors">TCS</button> •
+                <button onclick="setSymbol('INFY')" class="hover:text-blue-400 transition-colors">Infosys</button> •
+                <button onclick="setSymbol('HDFCBANK')" class="hover:text-blue-400 transition-colors">HDFC Bank</button>
+            </div>
+        </div>
+
+        <!-- Live Grid -->
+        <div id="stockGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <!-- Cards will be injected here -->
+        </div>
+    </div>
+
+    <script>
+        let stompClient = null;
+        const stocks = new Map();
+
+        function connect() {
+            // Note: We use /api/ws because the app context path is /api
+            const socket = new SockJS('/api/ws');
+            stompClient = Stomp.over(socket);
+            stompClient.debug = null; // Disable debug logs
+
+            stompClient.connect({}, function (frame) {
+                console.log('Connected: ' + frame);
+                updateStatus(true);
+
+                stompClient.subscribe('/topic/market-data', function (message) {
+                    handleMarketUpdate(JSON.parse(message.body));
+                });
+            }, function (error) {
+                console.error('WebSocket Error:', error);
+                updateStatus(false);
+                setTimeout(connect, 5000); // Auto reconnect
+            });
+
+            // Detect when WebSocket closes
+            socket.onclose = function () {
+                console.log('WebSocket connection closed');
+                updateStatus(false);
+            };
+        }
+
+
+        function updateStatus(connected) {
+            const el = document.getElementById('connectionStatus');
+            if (connected) {
+                el.className = 'px-3 py-1 rounded-full text-sm font-medium bg-green-900 text-green-200';
+                el.innerText = '● Live Connected';
+            } else {
+                el.className = 'px-3 py-1 rounded-full text-sm font-medium bg-red-900 text-red-200';
+                el.innerText = '○ Disconnected';
+            }
+        }
+
+        function setSymbol(symbol) {
+            document.getElementById('symbolInput').value = symbol;
+            hideAutocomplete();
+        }
+
+        let selectedIndex = -1;
+        let autocompleteResults = [];
+
+        function handleKeyDown(event) {
+            const dropdown = document.getElementById('autocompleteDropdown');
+            const isDropdownVisible = !dropdown.classList.contains('hidden');
+
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                if (isDropdownVisible && selectedIndex >= 0 && selectedIndex < autocompleteResults.length) {
+                    // Select the highlighted item
+                    const selected = autocompleteResults[selectedIndex];
+                    selectInstrument(selected.symbol, selected.name);
+                }
+                // Always trigger subscribe on Enter
+                subscribeSymbol();
+            } else if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                if (isDropdownVisible && autocompleteResults.length > 0) {
+                    selectedIndex = Math.min(selectedIndex + 1, autocompleteResults.length - 1);
+                    updateSelectedItem();
+                }
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                if (isDropdownVisible && autocompleteResults.length > 0) {
+                    selectedIndex = Math.max(selectedIndex - 1, -1);
+                    updateSelectedItem();
+                }
+            } else if (event.key === 'Escape') {
+                hideAutocomplete();
+            }
+        }
+
+        function updateSelectedItem() {
+            const dropdown = document.getElementById('autocompleteDropdown');
+            const items = dropdown.querySelectorAll('.autocomplete-item');
+
+            items.forEach((item, index) => {
+                if (index === selectedIndex) {
+                    item.classList.add('bg-gray-600');
+                    item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                } else {
+                    item.classList.remove('bg-gray-600');
+                }
+            });
+        }
+
+        let searchTimeout;
+        function handleSymbolInput(value) {
+            clearTimeout(searchTimeout);
+
+            if (!value || value.trim().length < 2) {
+                hideAutocomplete();
+                return;
+            }
+
+            // Debounce search
+            searchTimeout = setTimeout(() => {
+                searchSymbols(value.trim());
+            }, 300);
+        }
+
+        function searchSymbols(query) {
+            fetch(`/api/market-data/search?query=${encodeURIComponent(query)}`)
+                .then(response => {
+                    if (response.ok) {
+                        return response.json();
+                    }
+                    throw new Error('Search failed');
+                })
+                .then(results => {
+                    displayAutocomplete(results);
+                })
+                .catch(error => {
+                    console.error('Search error:', error);
+                    hideAutocomplete();
+                });
+        }
+
+        function displayAutocomplete(results) {
+            const dropdown = document.getElementById('autocompleteDropdown');
+
+            if (!results || results.length === 0) {
+                hideAutocomplete();
+                return;
+            }
+
+            // Store results for keyboard navigation
+            autocompleteResults = results;
+            selectedIndex = -1; // Reset selection
+
+            dropdown.innerHTML = results.map((item, index) => `
+                <div class="autocomplete-item px-4 py-3 hover:bg-gray-600 cursor-pointer transition-colors border-b border-gray-600 last:border-b-0"
+                     onclick="selectInstrument('${item.symbol}', '${item.name}')"
+                     onmouseenter="selectedIndex=${index}; updateSelectedItem();">
+                    <div class="font-semibold text-white">${item.symbol}</div>
+                    <div class="text-xs text-gray-400">${item.name}</div>
+                </div>
+            `).join('');
+
+            dropdown.classList.remove('hidden');
+        }
+
+        function hideAutocomplete() {
+            document.getElementById('autocompleteDropdown').classList.add('hidden');
+            selectedIndex = -1;
+            autocompleteResults = [];
+        }
+
+        function selectInstrument(symbol, name) {
+            document.getElementById('symbolInput').value = symbol;
+            hideAutocomplete();
+        }
+
+        // Close autocomplete when clicking outside
+        document.addEventListener('click', function (event) {
+            const input = document.getElementById('symbolInput');
+            const dropdown = document.getElementById('autocompleteDropdown');
+            if (!input.contains(event.target) && !dropdown.contains(event.target)) {
+                hideAutocomplete();
+            }
+        });
+
+        function subscribeSymbol() {
+            const symbol = document.getElementById('symbolInput').value.toUpperCase();
+            if (!symbol) return;
+
+            hideAutocomplete();
+
+            // Check if we have the name from autocomplete results
+            const matchedResult = autocompleteResults.find(r =>
+                r.symbol.toUpperCase() === symbol.toUpperCase()
+            );
+            const companyName = matchedResult ? matchedResult.name : null;
+
+            // In a real app, we'd call a backend API to trigger the subscription
+            // For now, we manually trigger the REST endpoint using fetch
+            fetch(`/api/market-data/quote?symbol=${encodeURIComponent(symbol)}`)
+                .then(response => {
+                    if (response.ok) {
+                        return response.json();
+                    } else {
+                        // If authentication or other API error, show disconnected
+                        if (response.status === 401 || response.status === 503) {
+                            updateStatus(false);
+                        }
+                        return response.json().then(err => {
+                            throw new Error(err.message || 'Failed to subscribe: ' + response.statusText);
+                        }).catch(() => {
+                            throw new Error('Failed to subscribe: ' + response.statusText);
+                        });
+                    }
+                })
+                .then(data => {
+                    // Feed the initial data (closing price etc.) directly to our update handler
+                    handleMarketUpdate(data, companyName);
+                    document.getElementById('symbolInput').value = ''; // Clear input after success
+                })
+                .catch(error => {
+                    console.error('Subscription error:', error);
+                    alert(error.message);
+                });
+        }
+
+
+        function createStockCard(symbol, name) {
+            // Only extract the name part if possible (e.g., getting "INE..." from "NSE_EQ|INE...")
+            const displayName = name || symbol.split('|')[1] || symbol;
+
+            const card = document.createElement('div');
+            card.id = `card-${symbol.replace(/\|/g, '_')}`; // Safe ID
+            card.className = 'bg-gray-800 rounded-lg p-6 border border-gray-700 shadow-lg';
+            card.innerHTML = `
+                <div class="flex justify-between items-start mb-4">
+                    <div>
+                        <h3 class="text-2xl font-bold text-white tracking-tight">${displayName}</h3>
+                        <span class="text-xs text-gray-500 font-mono">${symbol}</span>
+                    </div>
+                    <span id="price-${symbol.replace(/\|/g, '_')}" class="text-3xl font-mono font-medium text-white transition-colors duration-300">---</span>
+                </div>
+                <div class="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                        <span class="text-gray-400 block mb-1">Vol</span>
+                        <span id="vol-${symbol.replace(/\|/g, '_')}" class="font-mono text-gray-300">---</span>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('stockGrid').prepend(card);
+            stocks.set(symbol, { lastPrice: 0, name: displayName });
+        }
+
+        function handleMarketUpdate(data, companyName) {
+            // Handle structure: { "NSE_EQ:SBIN": { ... } }
+            const symbolKey = Object.keys(data)[0];
+            const stockData = data[symbolKey];
+
+            // The instrumentToken is the key we use for tracking
+            const instrumentToken = stockData.instrumentToken; // e.g., "NSE_EQ|INE062A01020"
+            const safeId = instrumentToken.replace(/\|/g, '_');
+
+            if (!document.getElementById(`card-${safeId}`)) {
+                // Auto-create card if we receive data for it (backend might be streaming for others)
+                createStockCard(instrumentToken, companyName);
+            }
+
+            const priceEl = document.getElementById(`price-${safeId}`);
+            const cardEl = document.getElementById(`card-${safeId}`);
+
+            const newPrice = stockData.lastPrice;
+            const previousPrice = stocks.get(instrumentToken)?.lastPrice || newPrice;
+
+            // Update Price
+            priceEl.innerText = '₹' + newPrice.toFixed(2);
+            document.getElementById(`vol-${safeId}`).innerText = stockData.volume.toLocaleString();
+
+            // Flash Animation
+            if (newPrice > previousPrice) {
+                priceEl.classList.remove('text-red-400', 'text-white');
+                priceEl.classList.add('text-green-400');
+                cardEl.classList.remove('flash-red');
+                void cardEl.offsetWidth; // trigger reflow
+                cardEl.classList.add('flash-green');
+            } else if (newPrice < previousPrice) {
+                priceEl.classList.remove('text-green-400', 'text-white');
+                priceEl.classList.add('text-red-400');
+                cardEl.classList.remove('flash-green');
+                void cardEl.offsetWidth; // trigger reflow
+                cardEl.classList.add('flash-red');
+            }
+
+            const existingStock = stocks.get(instrumentToken);
+            stocks.set(instrumentToken, {
+                lastPrice: newPrice,
+                name: existingStock?.name || companyName
+            });
+        }
+
+        // Auto connect on load
+        connect();
+    </script>
+</body>
+
+</html>

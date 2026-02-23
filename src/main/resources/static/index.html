@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TradeIntel AI | Trading Platform</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="icon" type="image/png" href="favicon.png">
+    <link rel="apple-touch-icon" href="favicon.png">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.0/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+</head>
+
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">
+                    <img src="favicon.png" alt="TradeIntel AI" style="width:40px;height:40px;border-radius:10px;vertical-align:middle;margin-right:10px;">
+                    <h1 style="display:inline-block;vertical-align:middle;">TradeIntel AI</h1>
+                    <p class="subtitle">Intelligent Trading Platform</p>
+                </div>
+                <div class="header-actions">
+                    <div id="connectionStatus" class="status-badge disconnected">
+                        <span class="status-dot"></span>
+                        <span class="broker-label">Upstox</span>
+                        <span class="status-text">Disconnected</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs">
+        <div class="container">
+            <button class="tab-btn active" data-tab="dashboard">
+                <span class="tab-icon">📊</span>
+                Dashboard
+            </button>
+            <button class="tab-btn" data-tab="strategies">
+                <span class="tab-icon">🎯</span>
+                Strategies
+            </button>
+            <button class="tab-btn" data-tab="backtest">
+                <span class="tab-icon">📈</span>
+                Backtest
+            </button>
+            <button class="tab-btn" data-tab="ai-insights">
+                <span class="tab-icon">🤖</span>
+                AI Insights
+            </button>
+            <button class="tab-btn" data-tab="settings">
+                <span class="tab-icon">⚙️</span>
+                Settings
+            </button>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="container">
+
+            <!-- Dashboard Tab -->
+            <div id="dashboard" class="tab-content active">
+                <div class="section-header">
+                    <h2>Live Market Data</h2>
+                    <p class="section-subtitle">Real-time stock prices via WebSocket</p>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-title">Subscribe to Instruments</h3>
+                    <div class="input-group">
+                        <div class="autocomplete-wrapper">
+                            <input type="text" id="symbolInput" placeholder="Enter stock symbol (e.g., TATAPOWER, SBIN)"
+                                class="input-field" autocomplete="off">
+                            <div id="autocompleteDropdown" class="autocomplete-dropdown hidden"></div>
+                        </div>
+                        <button onclick="subscribeSymbol()" class="btn btn-primary">Add Stock</button>
+                    </div>
+                    <div class="popular-stocks">
+                        <span class="label">Popular:</span>
+                        <button onclick="setSymbol('TATAPOWER')" class="chip">Tata Power</button>
+                        <button onclick="setSymbol('SBIN')" class="chip">SBI</button>
+                        <button onclick="setSymbol('RELIANCE')" class="chip">Reliance</button>
+                        <button onclick="setSymbol('TCS')" class="chip">TCS</button>
+                        <button onclick="setSymbol('INFY')" class="chip">Infosys</button>
+                    </div>
+                </div>
+
+                <div id="stockGrid" class="stock-grid"></div>
+            </div>
+
+            <!-- Strategies Tab -->
+            <div id="strategies" class="tab-content">
+                <div class="section-header">
+                    <h2>Strategy Execution</h2>
+                    <p class="section-subtitle">Execute trading strategies and view signals</p>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-title">📥 Fetch Historical Data</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.9rem;">
+                        Fetch historical OHLCV data from Upstox before running strategies. Strategies need at least 30+
+                        days of data.
+                    </p>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="histSymbol">Stock Symbol</label>
+                            <input type="text" id="histSymbol" placeholder="e.g., TATAPOWER" class="input-field">
+                        </div>
+                        <div class="form-group">
+                            <label for="histInterval">Interval</label>
+                            <select id="histInterval" class="input-field">
+                                <option value="day">Daily (recommended)</option>
+                                <option value="week">Weekly</option>
+                                <option value="month">Monthly</option>
+                                <option value="30minute">30 Minute</option>
+                                <option value="1minute">1 Minute</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="button-group">
+                        <button onclick="fetchHistoricalData()" class="btn btn-primary">Fetch 1 Year Data</button>
+                    </div>
+                    <div id="histResult" style="margin-top: 0.75rem; font-size: 0.9rem;"></div>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-title">Execute Strategy</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="strategySymbol">Stock Symbol</label>
+                            <input type="text" id="strategySymbol" placeholder="e.g., TATAPOWER" class="input-field">
+                        </div>
+                        <div class="form-group">
+                            <label for="strategySelect">Select Strategy</label>
+                            <select id="strategySelect" class="input-field">
+                                <option value="">Loading strategies...</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="avgBuyPrice">Avg Buy Price (₹) <span
+                                    style="color: var(--text-muted); font-weight: 400; font-size: 0.8rem;">— optional,
+                                    for personalized AI advice</span></label>
+                            <input type="number" id="avgBuyPrice"
+                                placeholder="e.g., 350.50 (leave blank if not holding)" class="input-field" min="0"
+                                step="0.01">
+                        </div>
+                    </div>
+                    <div class="button-group">
+                        <button onclick="executeSingleStrategy()" class="btn btn-primary">Execute Strategy</button>
+                        <button onclick="executeAllStrategies()" class="btn btn-secondary">Execute All
+                            Strategies</button>
+                    </div>
+                </div>
+
+                <div id="strategyResults" class="results-container"></div>
+            </div>
+
+            <!-- Backtest Tab -->
+            <div id="backtest" class="tab-content">
+                <div class="section-header">
+                    <h2>Strategy Backtesting</h2>
+                    <p class="section-subtitle">Test strategies on historical data</p>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-title">Backtest Configuration</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="backtestSymbol">Stock Symbol</label>
+                            <input type="text" id="backtestSymbol" placeholder="e.g., TATAPOWER" class="input-field">
+                        </div>
+                        <div class="form-group">
+                            <label for="backtestStrategy">Strategy</label>
+                            <select id="backtestStrategy" class="input-field">
+                                <option value="">Select strategy...</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="backtestStartDate">Start Date</label>
+                            <input type="date" id="backtestStartDate" class="input-field">
+                        </div>
+                        <div class="form-group">
+                            <label for="backtestEndDate">End Date</label>
+                            <input type="date" id="backtestEndDate" class="input-field">
+                        </div>
+                        <div class="form-group">
+                            <label for="backtestCapital">Initial Capital (₹)</label>
+                            <input type="number" id="backtestCapital" value="100000" class="input-field">
+                        </div>
+                    </div>
+                    <button onclick="runBacktest()" class="btn btn-primary">Run Backtest</button>
+                </div>
+
+                <div id="backtestResults" class="results-container"></div>
+            </div>
+
+            <!-- AI Insights Tab -->
+            <div id="ai-insights" class="tab-content">
+                <div class="section-header">
+                    <h2>AI-Powered Insights</h2>
+                    <p class="section-subtitle">Get intelligent market analysis powered by OpenAI</p>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-title">AI Analysis</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="aiSymbol">Stock Symbol</label>
+                            <input type="text" id="aiSymbol" placeholder="e.g., TATAPOWER" class="input-field">
+                        </div>
+                        <div class="form-group">
+                            <label for="aiAnalysisType">Analysis Type</label>
+                            <select id="aiAnalysisType" class="input-field">
+                                <option value="comprehensive">Comprehensive Analysis</option>
+                                <option value="sentiment">Market Sentiment</option>
+                                <option value="pattern">Pattern Detection</option>
+                                <option value="regime">Market Regime</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button onclick="runAIAnalysis()" class="btn btn-primary">Analyze with AI</button>
+                </div>
+
+                <div id="aiResults" class="results-container"></div>
+            </div>
+
+            <!-- Settings Tab -->
+            <div id="settings" class="tab-content">
+                <div class="section-header">
+                    <h2>Settings & Configuration</h2>
+                    <p class="section-subtitle">Manage authentication and platform settings</p>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-title">Upstox Authentication</h3>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <span class="info-label">Status:</span>
+                            <span id="authStatus" class="info-value">Checking...</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Trading Mode:</span>
+                            <span id="tradingMode" class="info-value">Unknown</span>
+                        </div>
+                    </div>
+                    <div class="button-group">
+                        <button onclick="getAuthUrl()" class="btn btn-primary">Get Auth URL</button>
+                        <button onclick="checkAuthStatus()" class="btn btn-secondary">Check Status</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-title">Platform Information</h3>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <span class="info-label">Total Strategies:</span>
+                            <span class="info-value">8</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">API Version:</span>
+                            <span class="info-value">v1.0</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">WebSocket:</span>
+                            <span id="wsStatus" class="info-value">Disconnected</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay hidden">
+        <div class="spinner"></div>
+        <p class="loading-text">Processing...</p>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
