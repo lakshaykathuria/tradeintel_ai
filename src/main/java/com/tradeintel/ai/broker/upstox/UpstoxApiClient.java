@@ -47,7 +47,7 @@ public class UpstoxApiClient {
         ApiClient apiClient = authService.getAuthenticatedClient();
         OrderApi orderApi = new OrderApi(apiClient);
 
-        log.info("Placing order: {}", orderRequest);
+        log.info("Placing  order: {}", orderRequest);
         return orderApi.placeOrder(orderRequest, "1.0");
     }
 
