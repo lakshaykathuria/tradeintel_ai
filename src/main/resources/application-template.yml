@@ -1,34 +1,37 @@
+# This is a template file. Copy to application.yml and fill in your values.
+# DO NOT commit application.yml with real credentials to Git!
+
 spring:
   application:
     name: tradeintel-ai
-  
+
   # Database Configuration
   datasource:
     url: jdbc:postgresql://localhost:5432/trading_platform
-    username: ${DB_USERNAME:lakshay}
+    username: ${DB_USERNAME:your_db_username}
     password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
-  
+
   jpa:
     hibernate:
-      ddl-auto: update  # Auto-create/update tables from entities
+      ddl-auto: update
     show-sql: false
     properties:
       hibernate:
         format_sql: true
     open-in-view: false
-  
-  # Flyway Configuration for Database Migrations
+
+  # Flyway Configuration
   flyway:
     enabled: true
     baseline-on-migrate: true
     baseline-version: 0
     locations: classpath:db/migration
     validate-on-migrate: true
-  
+
   # Kafka Configuration
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
@@ -46,21 +49,21 @@ spring:
       order-events: order-events-topic
       signal-events: signal-events-topic
       portfolio-updates: portfolio-updates-topic
-  
+
   # AI Configuration (OpenAI)
   ai:
     openai:
       api-key: ${OPENAI_API_KEY}
       chat:
         options:
-          model: gpt-5.1
+          model: gpt-4o  # Valid models: gpt-4o, gpt-4-turbo, gpt-4, gpt-3.5-turbo
           temperature: 0.7
-  
+
   # Security Configuration
   security:
     user:
       name: ${SECURITY_USERNAME:admin}
-      password: ${SECURITY_PASSWORD:admin123}
+      password: ${SECURITY_PASSWORD}
 
 # Server Configuration
 server:
@@ -75,20 +78,20 @@ upstox:
     api-secret: ${UPSTOX_API_SECRET}
     redirect-url: ${UPSTOX_REDIRECT_URL:http://localhost:8080/api/upstox/callback}
     base-url: https://api.upstox.com/v2
-  
+
 # Trading Configuration
 trading:
-  mode: ${TRADING_MODE:PAPER_TRADING}  # REAL_MONEY or PAPER_TRADING
+  mode: ${TRADING_MODE:PAPER_TRADING}
   paper-trading:
-    initial-capital: 1000000.0  # 10 Lakhs for paper trading
+    initial-capital: 1000000.0
     commission-per-trade: 20.0
   risk-management:
-    max-position-size-percent: 10.0  # Max 10% of portfolio per position
-    max-portfolio-risk-percent: 2.0   # Max 2% portfolio risk per trade
-    max-daily-loss-percent: 5.0       # Stop trading if daily loss exceeds 5%
-    max-drawdown-percent: 15.0        # Alert if drawdown exceeds 15%
-    stop-loss-percent: 2.0            # Default stop loss percentage
-    take-profit-percent: 5.0          # Default take profit percentage
+    max-position-size-percent: 10.0
+    max-portfolio-risk-percent: 2.0
+    max-daily-loss-percent: 5.0
+    max-drawdown-percent: 15.0
+    stop-loss-percent: 2.0
+    take-profit-percent: 5.0
 
 # Actuator Configuration
 management:
@@ -122,9 +125,10 @@ app:
     allowed-origins: "*"
     endpoint: /ws
   scheduler:
-    market-data-refresh-rate: 1000  # milliseconds
-    portfolio-update-rate: 5000     # milliseconds
+    market-data-refresh-rate: 1000
+    portfolio-update-rate: 5000
   strategy:
     backtest:
       enabled: true
       default-period-days: 365
+

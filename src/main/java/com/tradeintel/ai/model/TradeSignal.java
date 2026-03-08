@@ -5,12 +5,9 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.Map;
 
 @Entity
 @Table(name = "trade_signals")
@@ -25,7 +22,7 @@ public class TradeSignal {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "strategy_id", nullable = false)
+    @JoinColumn(name = "strategy_id")
     private TradingStrategy strategy;
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -48,17 +45,9 @@ public class TradeSignal {
     @Column(columnDefinition = "TEXT")
     private String reasoning;
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb")
-    private Map<String, Object> metadata;
-
     @Builder.Default
     @Column(name = "is_executed")
     private Boolean isExecuted = false;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "executed_order_id")
-    private Order executedOrder;
 
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
