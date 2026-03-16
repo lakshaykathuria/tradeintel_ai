@@ -454,6 +454,90 @@ function executeAllStrategies() {
         .finally(() => hideLoading());
 }
 
+/**
+ * Run the Strategy Scoring Engine — weighted composite across all 14 strategies.
+ */
+function executeScoredStrategies() {
+    const symbol = document.getElementById('strategySymbol').value.trim().toUpperCase();
+    if (!symbol) {
+        showToast('Please enter a stock symbol', 'error');
+        return;
+    }
+    showLoading();
+    fetch('/api/execute/scored', {
+        method: 'POST',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol })
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.signal) {
+                displayScoringEngineResult(data);
+                showToast('Scoring Engine completed', 'success');
+            } else {
+                showToast(data.error || 'Scoring engine failed', 'error');
+            }
+        })
+        .catch(err => {
+            console.error('Scoring engine error:', err);
+            showToast('Scoring engine request failed', 'error');
+        })
+        .finally(() => hideLoading());
+}
+
+function displayScoringEngineResult(data) {
+    const container = document.getElementById('strategyResults');
+    const signalColor = data.signal === 'BUY' ? 'var(--success)'
+                      : data.signal === 'SELL' ? 'var(--danger)' : 'var(--text-muted)';
+    const signalIcon  = data.signal === 'BUY' ? '📈' : data.signal === 'SELL' ? '📉' : '⏸️';
+    const scoreColor  = data.totalScore > 0 ? 'var(--success)' : data.totalScore < 0 ? 'var(--danger)' : 'var(--text-muted)';
+
+    const rows = (data.breakdown || []).map(v => {
+        const voteColor = v.signal === 'BUY' ? 'var(--success)' : v.signal === 'SELL' ? 'var(--danger)' : 'var(--text-muted)';
+        const icon      = v.signal === 'BUY' ? '▲' : v.signal === 'SELL' ? '▼' : '—';
+        return `<tr>
+            <td style="font-weight:500">${v.strategy}</td>
+            <td style="color:${voteColor};font-weight:700">${icon} ${v.signal}</td>
+            <td>${v.confidence}</td>
+            <td style="color:var(--text-muted)">${v.weight}×</td>
+            <td style="color:${voteColor};font-weight:600">${v.weightedVote > 0 ? '+' : ''}${v.weightedVote}</td>
+        </tr>`;
+    }).join('');
+
+    const card = document.createElement('div');
+    card.className = 'result-card';
+    card.style.cssText = 'border:2px solid;border-color:' + signalColor + ';margin-bottom:1rem';
+    card.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem">
+            <h3 style="margin:0">${signalIcon} ${data.symbol} — Scoring Engine</h3>
+            <span style="background:${signalColor};color:#fff;padding:0.25rem 0.75rem;border-radius:999px;font-weight:700;font-size:1rem">${data.signal}</span>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0.75rem;margin:1rem 0">
+            <div class="metric-box"><div class="metric-label">Composite Score</div><div class="metric-value" style="color:${scoreColor}">${data.totalScore > 0 ? '+' : ''}${Number(data.totalScore).toFixed(2)}</div></div>
+            <div class="metric-box"><div class="metric-label">Confidence</div><div class="metric-value">${Math.round(data.confidence * 100)}%</div></div>
+            <div class="metric-box" style="background:rgba(0,200,100,0.1)"><div class="metric-label">🟢 Buy Votes</div><div class="metric-value" style="color:var(--success)">${data.buyVotes}</div></div>
+            <div class="metric-box" style="background:rgba(255,60,60,0.1)"><div class="metric-label">🔴 Sell Votes</div><div class="metric-value" style="color:var(--danger)">${data.sellVotes}</div></div>
+            <div class="metric-box"><div class="metric-label">⏸ Hold Votes</div><div class="metric-value">${data.holdVotes}</div></div>
+        </div>
+
+        <p style="color:var(--text-muted);font-size:0.85rem;margin:0.5rem 0 1rem">${data.summary}</p>
+
+        <details open>
+            <summary style="cursor:pointer;font-weight:600;margin-bottom:0.5rem">Strategy Breakdown (${(data.breakdown||[]).length} strategies)</summary>
+            <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:0.82rem">
+                <thead><tr style="color:var(--text-muted);text-align:left;border-bottom:1px solid rgba(255,255,255,0.1)">
+                    <th style="padding:0.4rem">Strategy</th><th>Signal</th><th>Conf</th><th>Weight</th><th>Votes</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+            </div>
+        </details>`;
+    container.insertBefore(card, container.firstChild);
+}
+
+
 function displayStrategyResult(data) {
     const container = document.getElementById('strategyResults');
     const card = document.createElement('div');

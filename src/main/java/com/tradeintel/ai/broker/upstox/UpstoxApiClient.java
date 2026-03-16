@@ -157,7 +157,10 @@ public class UpstoxApiClient {
         HistoryApi historyApi = new HistoryApi(apiClient);
 
         log.info("Fetching historical data for {} from {} to {}", instrumentKey, fromDate, toDate);
-        return historyApi.getHistoricalCandleData(instrumentKey, interval, toDate, fromDate);
+        // Use getHistoricalCandleData1 (5-param) which correctly accepts fromDate.
+        // getHistoricalCandleData (4-param) has signature (key, interval, toDate, apiVersion)
+        // — passing fromDate there sent it as the apiVersion header and ignored the date range.
+        return historyApi.getHistoricalCandleData1(instrumentKey, interval, toDate, fromDate, "2.0");
     }
 
     /**
@@ -171,6 +174,6 @@ public class UpstoxApiClient {
         HistoryApi historyApi = new HistoryApi(apiClient);
 
         log.info("Fetching intraday data for {}", instrumentKey);
-        return historyApi.getIntraDayCandleData(instrumentKey, interval, "1.0");
+        return historyApi.getIntraDayCandleData(instrumentKey, interval, "2.0");
     }
 }

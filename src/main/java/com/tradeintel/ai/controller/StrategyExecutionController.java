@@ -8,6 +8,7 @@ import com.tradeintel.ai.repository.StockRepository;
 import com.tradeintel.ai.service.AIStrategyService;
 import com.tradeintel.ai.service.NewsFetcherService;
 import com.tradeintel.ai.service.TradingStrategyService;
+import com.tradeintel.ai.strategy.StrategyScoreEngine;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -35,6 +37,7 @@ public class StrategyExecutionController {
     private final MarketDataRepository marketDataRepository;
     private final AIStrategyService aiStrategyService;
     private final NewsFetcherService newsFetcherService;
+    private final StrategyScoreEngine strategyScoreEngine;
 
     /**
      * Execute a single strategy on a stock
@@ -214,16 +217,84 @@ public class StrategyExecutionController {
         // (RSIStrategy, MACDStrategy)
         // Others get first letter lowercased (bollingerBandsStrategy,
         // movingAverageCrossoverStrategy, etc.)
-        strategies.put("RSIStrategy", "RSI Strategy - Momentum-based overbought/oversold");
-        strategies.put("MACDStrategy", "MACD Strategy - Trend following with crossovers");
-        strategies.put("bollingerBandsStrategy", "Bollinger Bands - Volatility-based mean reversion");
-        strategies.put("movingAverageCrossoverStrategy", "MA Crossover - Golden/Death cross detection");
-        strategies.put("stochasticStrategy", "Stochastic Oscillator - Short-term reversals");
-        strategies.put("volumeBreakoutStrategy", "Volume Breakout - High volume price moves");
-        strategies.put("supportResistanceStrategy", "Support/Resistance - Key level trading");
-        strategies.put("newsSentimentStrategy", "News Sentiment - AI-powered news & trend analysis");
+        // Original strategies
+        strategies.put("RSIStrategy", "RSI Strategy — momentum overbought/oversold");
+        strategies.put("MACDStrategy", "MACD Strategy — trend following with crossovers");
+        strategies.put("bollingerBandsStrategy", "Bollinger Bands — volatility mean reversion");
+        strategies.put("movingAverageCrossoverStrategy", "MA Crossover — golden/death cross");
+        strategies.put("stochasticStrategy", "Stochastic Oscillator — short-term reversals");
+        strategies.put("volumeBreakoutStrategy", "Volume Breakout — high-volume price moves");
+        strategies.put("supportResistanceStrategy", "Support/Resistance — key level trading");
+        strategies.put("newsSentimentStrategy", "News Sentiment — AI-powered news analysis");
+        // New strategies
+        strategies.put("VWAPStrategy", "VWAP — institutional fair-value crossover");
+        strategies.put("ATRVolatilityStrategy", "ATR Volatility Breakout — swing trading");
+        strategies.put("supertrendStrategy", "Supertrend — NSE/Indian market trend follower");
+        strategies.put("donchianBreakoutStrategy", "Donchian Breakout — Turtle Trading");
+        strategies.put("ADXTrendStrategy", "ADX Trend Strength — trades only trending markets");
+        strategies.put("meanReversionStrategy", "Mean Reversion — range-bound market strategy");
+        strategies.put("gapTradingStrategy", "Gap Trading — gap+volume momentum signal");
 
         return ResponseEntity.ok(strategies);
+    }
+
+    /**
+     * Run the Strategy Scoring Engine across all 14 strategies and return
+     * a weighted composite signal with full per-strategy breakdown.
+     */
+    @PostMapping("/scored")
+    public ResponseEntity<?> executeScoredStrategies(@RequestBody ScoredRequest request) {
+        try {
+            String symbol = request.getSymbol().toUpperCase().trim();
+            log.info("Running Strategy Scoring Engine on {}", symbol);
+
+            Stock stock = stockRepository.findBySymbol(symbol)
+                    .orElseGet(() -> {
+                        Stock s = new Stock();
+                        s.setSymbol(symbol); s.setName(symbol);
+                        s.setExchange("NSE"); s.setIsActive(true);
+                        return stockRepository.save(s);
+                    });
+
+            List<MarketData> marketData = marketDataRepository
+                    .findByStockIdOrderByTimestampDesc(stock.getId());
+            Collections.reverse(marketData);
+
+            if (marketData.isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "No market data for " + symbol + ". Fetch historical data first."));
+            }
+
+            StrategyScoreEngine.ScoredResult result = strategyScoreEngine.score(stock, marketData);
+
+            // Build response
+            Map<String, Object> response = new HashMap<>();
+            response.put("symbol",        symbol);
+            response.put("signal",        result.compositeSignal().getSignalType().toString());
+            response.put("confidence",    result.compositeSignal().getConfidenceScore());
+            response.put("totalScore",    result.totalScore());
+            response.put("buyVotes",      result.buyVotes());
+            response.put("sellVotes",     result.sellVotes());
+            response.put("holdVotes",     result.holdVotes());
+            response.put("summary",       result.summary());
+            response.put("breakdown",     result.breakdown().stream().map(v -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("strategy",     v.strategyName());
+                m.put("signal",       v.signal());
+                m.put("confidence",   Math.round(v.confidence() * 100) + "%");
+                m.put("weight",       v.weight());
+                m.put("weightedVote", Math.round(v.weightedVote() * 100.0) / 100.0);
+                m.put("reasoning",    v.reasoning());
+                return m;
+            }).toList());
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("Error running scoring engine", e);
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", "Scoring engine failed: " + e.getMessage()));
+        }
     }
 
     /**
@@ -244,5 +315,11 @@ public class StrategyExecutionController {
         private String symbol;
         /** Optional: user's average buy price for personalized AI P&L analysis */
         private Double avgBuyPrice;
+    }
+
+    /** Request DTO for the scoring engine endpoint. */
+    @Data
+    public static class ScoredRequest {
+        private String symbol;
     }
 }

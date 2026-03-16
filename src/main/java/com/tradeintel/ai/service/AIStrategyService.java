@@ -403,8 +403,12 @@ public class AIStrategyService {
             prompt.append("CONFIDENCE: [0-100]\n");
             prompt.append(
                     "REASONING: [Your detailed analysis — what the strategies say, what you agree/disagree with, and why]\n");
-            prompt.append("TARGET_PRICE: [A specific price target, or leave blank]\n");
-            prompt.append("STOP_LOSS: [A specific stop loss price, or leave blank]\n");
+            prompt.append("TARGET_PRICE: [A specific price target — must be BELOW current price for SELL, ABOVE for BUY]\n");
+            prompt.append("STOP_LOSS: [A specific stop loss — must be ABOVE current price for SELL (exit if price rises above this), BELOW current price for BUY (exit if price falls below this)]\n");
+            prompt.append("\nIMPORTANT rules:\n");
+            prompt.append("  - For SELL signal: stop_loss > current_price > target_price\n");
+            prompt.append("  - For BUY  signal: target_price > current_price > stop_loss\n");
+            prompt.append("  - Use realistic percentage offsets (e.g. 2-5% for stop loss, 5-15% for target)\n");
 
             log.info("=== FULL PROMPT TO AI ===\n{}", prompt.toString());
 
@@ -455,6 +459,44 @@ public class AIStrategyService {
                     result.put("aiStopLoss", parsed);
                 } else {
                     log.warn("Could not parse AI stop loss '{}'", stopStr);
+                }
+            }
+
+            // --- Post-parse sanity check ---
+            // Ensure stop loss and target are on the correct sides of the current price.
+            // If the AI got it backwards, reflect the value so it is valid.
+            double currentPx = marketData.get(marketData.size() - 1).getClosePrice().doubleValue();
+            String finalSignal = (String) result.getOrDefault("aiSignal", "HOLD");
+            if (result.containsKey("aiStopLoss")) {
+                double sl = ((Number) result.get("aiStopLoss")).doubleValue();
+                if ("BUY".equalsIgnoreCase(finalSignal) && sl > currentPx) {
+                    // BUY stop loss must be BELOW current price
+                    double corrected = currentPx - (sl - currentPx);  // mirror around current price
+                    log.warn("Auto-correcting BUY stop loss from {} to {} (was above current price {})",
+                            sl, corrected, currentPx);
+                    result.put("aiStopLoss", Math.max(corrected, currentPx * 0.92)); // floor at -8%
+                } else if ("SELL".equalsIgnoreCase(finalSignal) && sl < currentPx) {
+                    // SELL stop loss must be ABOVE current price
+                    double corrected = currentPx + (currentPx - sl);  // mirror around current price
+                    log.warn("Auto-correcting SELL stop loss from {} to {} (was below current price {})",
+                            sl, corrected, currentPx);
+                    result.put("aiStopLoss", Math.min(corrected, currentPx * 1.08)); // cap at +8%
+                }
+            }
+            if (result.containsKey("aiTargetPrice")) {
+                double tp = ((Number) result.get("aiTargetPrice")).doubleValue();
+                if ("BUY".equalsIgnoreCase(finalSignal) && tp < currentPx) {
+                    // BUY target must be ABOVE current price
+                    double corrected = currentPx + (currentPx - tp);
+                    log.warn("Auto-correcting BUY target from {} to {} (was below current price {})",
+                            tp, corrected, currentPx);
+                    result.put("aiTargetPrice", corrected);
+                } else if ("SELL".equalsIgnoreCase(finalSignal) && tp > currentPx) {
+                    // SELL target must be BELOW current price
+                    double corrected = currentPx - (tp - currentPx);
+                    log.warn("Auto-correcting SELL target from {} to {} (was above current price {})",
+                            tp, corrected, currentPx);
+                    result.put("aiTargetPrice", Math.max(corrected, currentPx * 0.85)); // floor at -15%
                 }
             }
 

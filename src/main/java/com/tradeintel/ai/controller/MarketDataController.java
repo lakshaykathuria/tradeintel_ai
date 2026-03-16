@@ -3,6 +3,7 @@ package com.tradeintel.ai.controller;
 import com.tradeintel.ai.broker.upstox.UpstoxApiClient;
 import com.tradeintel.ai.service.HistoricalDataService;
 import com.tradeintel.ai.service.InstrumentService;
+import com.tradeintel.ai.service.LiveQuotePollerService;
 import com.upstox.api.GetFullMarketQuoteResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,14 +23,17 @@ public class MarketDataController {
     private final UpstoxApiClient upstoxApiClient;
     private final InstrumentService instrumentService;
     private final HistoricalDataService historicalDataService;
+    private final LiveQuotePollerService liveQuotePollerService;
 
     @Autowired(required = false)
     public MarketDataController(UpstoxApiClient upstoxApiClient,
             InstrumentService instrumentService,
-            HistoricalDataService historicalDataService) {
+            HistoricalDataService historicalDataService,
+            LiveQuotePollerService liveQuotePollerService) {
         this.upstoxApiClient = upstoxApiClient;
         this.instrumentService = instrumentService;
         this.historicalDataService = historicalDataService;
+        this.liveQuotePollerService = liveQuotePollerService;
     }
 
     /**
@@ -82,6 +86,10 @@ public class MarketDataController {
             log.info("Resolved '{}' to instrument key: {}", symbol, instrumentKey);
 
             GetFullMarketQuoteResponse quote = upstoxApiClient.getQuote(instrumentKey);
+            // Auto-register with live poller so this symbol gets auto-refreshed every 15s
+            if (liveQuotePollerService != null) {
+                liveQuotePollerService.subscribe(symbol);
+            }
             return ResponseEntity.ok(quote.getData());
         } catch (IllegalArgumentException e) {
             Map<String, String> error = new HashMap<>();
@@ -145,6 +153,26 @@ public class MarketDataController {
             error.put("error", "Failed to fetch historical data");
             error.put("message", e.getMessage());
             return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    /**
+     * Subscribe a symbol to live polling (auto-refreshed every 15 seconds).
+     * The frontend calls this so newly added stocks get price auto-updates.
+     */
+    @PostMapping("/subscribe")
+    public ResponseEntity<?> subscribeLive(@RequestParam String symbol) {
+        if (liveQuotePollerService == null) {
+            return ResponseEntity.status(503).body(Map.of("error", "Poller not available"));
+        }
+        try {
+            liveQuotePollerService.subscribe(symbol);
+            return ResponseEntity.ok(Map.of(
+                    "symbol", symbol.toUpperCase(),
+                    "message", "Subscribed to live updates",
+                    "watched", liveQuotePollerService.getWatchedSymbols()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
     }
 

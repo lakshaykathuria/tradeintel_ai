@@ -5,7 +5,10 @@ import com.tradeintel.ai.model.MarketData;
 import com.tradeintel.ai.model.Stock;
 import com.tradeintel.ai.repository.MarketDataRepository;
 import com.tradeintel.ai.repository.StockRepository;
+import com.upstox.api.GetFullMarketQuoteResponse;
 import com.upstox.api.GetHistoricalCandleResponse;
+import com.upstox.api.GetIntraDayCandleResponse;
+import com.upstox.api.MarketQuoteSymbol;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -16,7 +19,6 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -49,55 +51,85 @@ public class HistoricalDataService {
         try {
             // Resolve symbol to instrument key
             String instrumentKey = instrumentService.resolveToInstrumentKey(symbol);
-            log.info("Fetching historical data for {} ({}), interval={}, from={} to={}",
-                    symbol, instrumentKey, interval, fromDate, toDate);
+            // Note: from/to may be null here — defaults applied below
+            log.info("Fetching historical data for {} ({}), interval={}", symbol, instrumentKey, interval);
 
-            // Default dates if not provided
-            if (toDate == null || toDate.isBlank()) {
-                toDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
-            }
-            if (fromDate == null || fromDate.isBlank()) {
-                fromDate = LocalDate.now().minusYears(1).format(DateTimeFormatter.ISO_LOCAL_DATE);
-            }
+            // Parse / default dates
+            LocalDate to = (toDate == null || toDate.isBlank())
+                    ? LocalDate.now()
+                    : LocalDate.parse(toDate);
+            LocalDate from = (fromDate == null || fromDate.isBlank())
+                    ? to.minusYears(1)
+                    : LocalDate.parse(fromDate);
             if (interval == null || interval.isBlank()) {
                 interval = "day";
             }
 
-            // Fetch from Upstox
-            GetHistoricalCandleResponse response = upstoxApiClient.getHistoricalData(
-                    instrumentKey, interval, toDate, fromDate);
-
-            if (response == null || response.getData() == null) {
-                log.warn("No historical data returned for {}", symbol);
-                return 0;
+            // The Upstox V2 ranged historical endpoint:
+            //   /v2/historical-candle/{key}/{interval}/{to_date}/{from_date}
+            // rejects requests where toDate is today (for intraday) and rejects ranges
+            // exceeding ~100 days in a single call.
+            //
+            // Strategy:
+            //   1. For intraday intervals cap toDate at yesterday — today's live candles
+            //      are fetched separately via the intraday endpoint.
+            //   2. Always fetch in 90-day chunks to stay within the per-call limit.
+            boolean isIntraday = interval.contains("minute");
+            if (isIntraday && !to.isBefore(LocalDate.now())) {
+                to = LocalDate.now().minusDays(1);
             }
 
-            // Find or create stock
+            // Find or create stock early so we can stream candles from all chunks
             String cleanSymbol = extractCleanSymbol(symbol, instrumentKey);
             Stock stock = findOrCreateStock(cleanSymbol, instrumentKey);
 
-            // Parse and save candles
-            // Upstox returns candles as List<List<Object>>: [timestamp, open, high, low,
-            // close, volume, oi]
-            Object candlesObj = response.getData().getCandles();
-            if (candlesObj == null) {
-                log.warn("No candles in response for {}", symbol);
-                return 0;
-            }
-
-            @SuppressWarnings("unchecked")
-            List<List<Object>> candles = (List<List<Object>>) candlesObj;
             int savedCount = 0;
+            final int CHUNK_DAYS = 90;
+            LocalDate chunkFrom = from;
 
-            for (List<Object> candle : candles) {
-                try {
-                    savedCount += saveCandle(stock, candle);
-                } catch (Exception e) {
-                    log.debug("Skipping candle (likely duplicate): {}", e.getMessage());
+            while (!chunkFrom.isAfter(to)) {
+                LocalDate chunkTo = chunkFrom.plusDays(CHUNK_DAYS - 1);
+                if (chunkTo.isAfter(to)) {
+                    chunkTo = to;
                 }
+
+                String chunkFromStr = chunkFrom.format(DateTimeFormatter.ISO_LOCAL_DATE);
+                String chunkToStr   = chunkTo.format(DateTimeFormatter.ISO_LOCAL_DATE);
+                log.info("Fetching chunk from={} to={} for {}", chunkFromStr, chunkToStr, cleanSymbol);
+
+                try {
+                    GetHistoricalCandleResponse response = upstoxApiClient.getHistoricalData(
+                            instrumentKey, interval, chunkToStr, chunkFromStr);
+
+                    if (response != null && response.getData() != null
+                            && response.getData().getCandles() != null) {
+                        @SuppressWarnings("unchecked")
+                        List<List<Object>> candles = (List<List<Object>>) response.getData().getCandles();
+                        for (List<Object> candle : candles) {
+                            try {
+                                savedCount += saveCandle(stock, candle);
+                            } catch (Exception e) {
+                                log.debug("Skipping candle (likely duplicate): {}", e.getMessage());
+                            }
+                        }
+                        log.info("Chunk {}-{}: {} candles returned", chunkFromStr, chunkToStr, candles.size());
+                    }
+                } catch (Exception e) {
+                    // Skip bad chunks (e.g. holidays-only ranges) and continue
+                    log.warn("Chunk {}-{} failed, skipping: {}", chunkFromStr, chunkToStr, e.getMessage());
+                }
+
+                chunkFrom = chunkTo.plusDays(1);
             }
 
-            log.info("Saved {}/{} candles for {}", savedCount, candles.size(), cleanSymbol);
+            log.info("Saved {} historical candles total for {}", savedCount, cleanSymbol);
+
+            // Always try to fetch today's live data — the historical endpoint never includes
+            // today's incomplete candle regardless of interval (day, 30minute, etc.).
+            // For intraday intervals the intraday-candle endpoint is tried first;
+            // for all intervals the market quote API is the final fallback.
+            savedCount += fetchAndSaveTodayIntradayData(instrumentKey, interval, stock);
+
             return savedCount;
 
         } catch (IllegalStateException e) {
@@ -109,6 +141,7 @@ public class HistoricalDataService {
             throw new RuntimeException("Failed to fetch historical data: " + e.getMessage(), e);
         }
     }
+
 
     /**
      * Save a single candle to the database. Returns 1 if saved, 0 if skipped.
@@ -164,6 +197,80 @@ public class HistoricalDataService {
         md.setVolume(volume);
         marketDataRepository.save(md);
         return 1;
+    }
+
+    /**
+     * Fetch today's intraday candles and save them.
+     *
+     * Primary: the /v2/historical-candle/intraday endpoint (returns 30-min bars for today).
+     * Fallback: the full market quote endpoint, which saves a single day-level candle
+     *           with today's OHLC + volume. This works even outside market hours and is
+     *           the same data the dashboard already fetches successfully.
+     */
+    private int fetchAndSaveTodayIntradayData(String instrumentKey, String interval, Stock stock) {
+        // --- Primary: intraday candle bars ---
+        try {
+            GetIntraDayCandleResponse response = upstoxApiClient.getIntradayData(instrumentKey, interval);
+            if (response != null && response.getData() != null
+                    && response.getData().getCandles() != null) {
+                @SuppressWarnings("unchecked")
+                List<List<Object>> candles = (List<List<Object>>) response.getData().getCandles();
+                if (!candles.isEmpty()) {
+                    int savedCount = 0;
+                    for (List<Object> candle : candles) {
+                        try {
+                            savedCount += saveCandle(stock, candle);
+                        } catch (Exception e) {
+                            log.debug("Skipping intraday candle (likely duplicate): {}", e.getMessage());
+                        }
+                    }
+                    log.info("Saved {}/{} intraday candles for {} (today)", savedCount, candles.size(), stock.getSymbol());
+                    return savedCount;
+                }
+            }
+            log.debug("Intraday candle endpoint returned no candles for {} — trying quote fallback", stock.getSymbol());
+        } catch (Exception e) {
+            log.warn("Intraday candle fetch failed for {} ({}), falling back to quote: {}",
+                    stock.getSymbol(), instrumentKey, e.getMessage());
+        }
+
+        // --- Fallback: market quote gives today's day OHLCV ---
+        try {
+            GetFullMarketQuoteResponse quote = upstoxApiClient.getQuote(instrumentKey);
+            if (quote != null && quote.getData() != null) {
+                // getData() returns Map<String, MarketQuoteSymbol>
+                MarketQuoteSymbol sym = quote.getData().values().stream().findFirst().orElse(null);
+                if (sym != null && sym.getOhlc() != null && sym.getLastPrice() != null) {
+                    // Use 15:30 as a stable today marker (day-close candle)
+                    LocalDateTime todayMark = LocalDate.now().atTime(15, 30);
+
+                    BigDecimal open  = BigDecimal.valueOf(sym.getOhlc().getOpen());
+                    BigDecimal high  = BigDecimal.valueOf(sym.getOhlc().getHigh());
+                    BigDecimal low   = BigDecimal.valueOf(sym.getOhlc().getLow());
+                    BigDecimal close = BigDecimal.valueOf(sym.getLastPrice()); // use LTP as latest close
+                    long volume = sym.getVolume() != null ? sym.getVolume() : 0L;
+
+                    // Upsert: update if today's candle already exists
+                    Optional<MarketData> existing = marketDataRepository.findByStockAndTimestamp(stock, todayMark);
+                    MarketData md = existing.orElseGet(MarketData::new);
+                    md.setStock(stock);
+                    md.setTimestamp(todayMark);
+                    md.setOpenPrice(open);
+                    md.setHighPrice(high);
+                    md.setLowPrice(low);
+                    md.setClosePrice(close);
+                    md.setVolume(volume);
+                    marketDataRepository.save(md);
+                    log.info("Saved today's day candle for {} via quote fallback — LTP={}  Vol={}",
+                            stock.getSymbol(), close, volume);
+                    return 1;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Quote fallback also failed for {}: {}", stock.getSymbol(), e.getMessage());
+        }
+
+        return 0;
     }
 
     private Stock findOrCreateStock(String symbol, String instrumentKey) {
